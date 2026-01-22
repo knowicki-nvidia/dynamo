@@ -532,6 +532,7 @@ mod tests {
                 uuid: uuid::Uuid::new_v4(),
                 requirement: None,
                 request_type: crate::block_manager::connector::protocol::RequestType::Immediate,
+                chained: false,
             },
         );
 

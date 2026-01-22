@@ -69,13 +69,13 @@ where
                 src_desc.as_ptr() as usize,
                 src_desc.size(),
                 src_desc.device_id(),
-            )?;
+            );
 
             dst_dl.add_desc(
                 dst_desc.as_ptr() as usize,
                 dst_desc.size(),
                 dst_desc.device_id(),
-            )?;
+            );
         }
 
         Ok(())
@@ -96,13 +96,13 @@ where
                         src_desc.as_ptr() as usize,
                         src_desc.size(),
                         src_desc.device_id(),
-                    )?;
+                    );
 
                     dst_dl.add_desc(
                         dst_desc.as_ptr() as usize,
                         dst_desc.size(),
                         dst_desc.device_id(),
-                    )?;
+                    );
                 }
             }
         }
@@ -350,14 +350,8 @@ where
             let block_view = block.block_data().block_view()?;
             let addr = unsafe { block_view.as_ptr() as usize };
 
-            src_dl.add_desc(addr, block_size, 0).map_err(|e| {
-                TransferError::ExecutionError(format!("Failed to add src desc: {e}"))
-            })?;
-            dst_dl
-                .add_desc(0, block_size, desc.sequence_hash().unwrap())
-                .map_err(|e| {
-                    TransferError::ExecutionError(format!("Failed to add dst desc: {e}"))
-                })?;
+            src_dl.add_desc(addr, block_size, 0);
+            dst_dl.add_desc(0, block_size, desc.sequence_hash().unwrap());
         }
 
         // Determine the transfer operation

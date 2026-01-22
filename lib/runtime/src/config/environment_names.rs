@@ -249,12 +249,23 @@ pub mod kvbm {
         /// Example: "/mnt/shared-nvme/kvcache-{worker_id}"
         pub const DYN_KVBM_REMOTE_DISK_PATH: &str = "DYN_KVBM_REMOTE_DISK_PATH";
 
-        /// Enable GPU Direct Storage for remote disk transfers
+        /// Enable GDS_MT backend for remote disk transfers
         ///
-        /// Set to "1" or "true" to enable GDS for GPU->Disk transfers.
-        /// Requires compatible filesystem and GPU drivers.
-        /// Default: true if GDS is available
+        /// When enabled, uses the GDS_MT NIXL backend for DRAM <-> File transfers.
+        /// Set to "1" or "true" to enable, "0" or "false" to disable.
+        /// Default: true
         pub const DYN_KVBM_REMOTE_DISK_USE_GDS: &str = "DYN_KVBM_REMOTE_DISK_USE_GDS";
+
+        /// Timeout in seconds for G4 (remote storage) transfers.
+        pub const DYN_KVBM_G4_TRANSFER_TIMEOUT_SECS: &str = "DYN_KVBM_G4_TRANSFER_TIMEOUT_SECS";
+
+        /// Maximum concurrent H2O (host-to-object) transfers for backpressure control.
+        ///
+        /// Limits how many H2O transfers can be pending at once to prevent host memory
+        /// exhaustion when object storage is slow. If the limit is reached, new H2O
+        /// transfers are skipped and blocks are evicted from host normally.
+        /// Default: 8
+        pub const DYN_KVBM_MAX_CONCURRENT_H2O: &str = "DYN_KVBM_MAX_CONCURRENT_H2O";
     }
 
     /// KVBM leader (distributed mode) configuration

@@ -1,7 +1,33 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{any::Any, cmp::max, sync::Arc};
+use std::{any::Any, cmp::max, sync::Arc, time::Duration};
+
+use dynamo_runtime::config::environment_names::kvbm::remote_storage as env_g4;
+use once_cell::sync::Lazy;
+
+/// Default maximum concurrent H2O (host-to-object) transfers.
+const DEFAULT_MAX_CONCURRENT_H2O: usize = 8;
+
+/// Default timeout in seconds for G4 (remote storage) transfers.
+const DEFAULT_G4_TRANSFER_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum concurrent H2O transfers - cached from env var.
+static MAX_CONCURRENT_H2O: Lazy<usize> = Lazy::new(|| {
+    std::env::var(env_g4::DYN_KVBM_MAX_CONCURRENT_H2O)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_H2O)
+});
+
+/// Timeout for G4 transfers - cached from env var.
+static G4_TRANSFER_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
+    let secs: u64 = std::env::var(env_g4::DYN_KVBM_G4_TRANSFER_TIMEOUT_SECS)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_G4_TRANSFER_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+});
 
 use dynamo_llm::{
     block_manager::{
@@ -401,6 +427,11 @@ pub struct VllmConnectorSlot {
     /// This prevents infinite retry loops when remote storage has stale registry entries.
     skip_g4_on_retry: bool,
 
+    /// Flag indicating the slot just recovered from a failed transfer.
+    /// When true, `apply_scheduler_output` should ignore vLLM's `num_computed_tokens`
+    /// since it reflects pre-failure state, not our reset state.
+    recovered_from_failed_transfer: bool,
+
     /// G4 hashes with their positions that were attempted but may have failed.
     /// Used to invalidate stale registry entries when onboard fails.
     /// Stores (sequence_hash, position) pairs where position is the index in the offloaded sequence.
@@ -451,6 +482,7 @@ impl VllmConnectorSlot {
             performed_cache_lookup: false,
             total_blocks_queried: 0,
             skip_g4_on_retry: false,
+            recovered_from_failed_transfer: false,
             attempted_g4_hashes: None,
             cache_stats,
             leader,
@@ -517,10 +549,30 @@ impl Slot for VllmConnectorSlot {
     }
 
     fn reset_after_preemption(&mut self) {
-        assert!(self.staging_from_disk.is_none());
-        assert!(self.staging_from_host.is_none());
-        assert!(self.staging_from_g4.is_none());
-        assert!(self.pending_operations.is_none());
+        // Preemption can happen at any time, including:
+        // - After acquire_local_matches staged blocks but before trigger_onboarding
+        // - While there are pending transfer operations
+        // Using assert! would crash vLLM in production. Instead, gracefully clean up.
+        if self.staging_from_disk.is_some() {
+            tracing::warn!(request_id = %self.request_id, "Preemption while disk blocks staged");
+            self.staging_from_disk.take();
+        }
+        if self.staging_from_host.is_some() {
+            tracing::warn!(request_id = %self.request_id, "Preemption while host blocks staged");
+            self.staging_from_host.take();
+        }
+        if self.staging_from_g4.is_some() {
+            tracing::warn!(request_id = %self.request_id, "Preemption while G4 hashes staged");
+            self.staging_from_g4.take();
+        }
+        if self.pending_operations.is_some() {
+            tracing::warn!(
+                request_id = %self.request_id,
+                pending_ops = self.pending_operations.as_ref().map(|o| o.len()).unwrap_or(0),
+                "Preemption while operations pending"
+            );
+            self.pending_operations.take();
+        }
 
         self.state = SlotState::Preempted;
         self.iteration_first_scheduled = None;
@@ -575,6 +627,34 @@ impl Slot for VllmConnectorSlot {
         num_computed_tokens: usize,
         num_scheduled_tokens: usize,
     ) -> Result<(), SlotError> {
+        // Handle recovery from failed onboard prior to processing the scheduler output.
+        // When a transfer fails and vLLM reschedules the request, apply_scheduler_output
+        // is called BEFORE acquire_local_matches. We need to detect the failed state here
+        // and reset, otherwise our stale current_position will cause capacity errors.
+        if matches!(self.state, SlotState::Onboarding(_)) {
+            tracing::warn!(
+                request_id = %self.request_id,
+                current_position = self.current_position,
+                device_blocks = self.device_blocks.len(),
+                num_computed_tokens = num_computed_tokens,
+                "Detected Onboarding state in apply_scheduler_output - recovering from failed transfer"
+            );
+            // Reset slot state for retry.
+            // Do not clear device_blocks
+            self.current_position = 0;
+            self.evaluated_blocks = 0;
+            self.tokens_cached_from_device = 0;
+            self.tokens_cached_from_host = 0;
+            self.tokens_cached_from_disk = 0;
+            self.tokens_cached_from_g4 = 0;
+            self.performed_cache_lookup = false;
+            self.total_blocks_queried = 0;
+            self.skip_g4_on_retry = true;
+            self.recovered_from_failed_transfer = true;
+            self.pending_operations.take();
+            self.attempted_g4_hashes.take();
+        }
+
         if !tokens.is_empty() {
             tracing::debug!(
                 "appending {} newly decoded tokens to sequence",
@@ -586,26 +666,57 @@ impl Slot for VllmConnectorSlot {
             self.state = SlotState::Prefilling;
         }
 
-        // Use max to advance both current_position and evaluated_blocks at least by num_computed_tokens.
-        // This logic is to prevent redundant block offloading.
-        self.current_position = max(self.current_position, num_computed_tokens);
-        self.evaluated_blocks = max(self.evaluated_blocks, num_computed_tokens / self.block_size);
-
         // apply new block_ids
         if !block_ids.is_empty() {
             tracing::debug!("assigning {} new device blocks slot", block_ids.len());
             self.device_blocks.extend(block_ids);
         }
 
+        // After recovery, vLLM's num_computed_tokens reflects pre-failure state.
+        // Use our reset position instead.
+        let effective_computed_tokens = if self.recovered_from_failed_transfer {
+            tracing::info!(
+                request_id = %self.request_id,
+                vllm_computed_tokens = num_computed_tokens,
+                our_position = self.current_position,
+                device_blocks = self.device_blocks.len(),
+                "Ignoring vLLM's stale num_computed_tokens after recovery"
+            );
+            self.recovered_from_failed_transfer = false;
+            self.current_position
+        } else {
+            num_computed_tokens
+        };
+
+        // Use max to advance both current_position and evaluated_blocks at least by effective_computed_tokens.
+        // This logic is to prevent redundant block offloading.
+        self.current_position = max(self.current_position, effective_computed_tokens);
+        self.evaluated_blocks = max(
+            self.evaluated_blocks,
+            self.current_position / self.block_size,
+        );
+
         // we should have enough device blocks to cover the newly scheduled tokens
         let next_position = self.current_position + num_scheduled_tokens;
-        assert!(
-            next_position <= self.device_blocks.len() * self.block_size,
-            "next_position: {} > device_blocks.len() {} * block_size {}",
-            next_position,
-            self.device_blocks.len(),
-            self.block_size
-        );
+        let capacity = self.device_blocks.len() * self.block_size;
+        if next_position > capacity {
+            // This can happen when vLLM's state is out of sync with ours (e.g., after recovery).
+            // Return an error instead of panicking - vLLM will handle the retry.
+            tracing::error!(
+                request_id = %self.request_id,
+                next_position = next_position,
+                capacity = capacity,
+                device_blocks = self.device_blocks.len(),
+                block_size = self.block_size,
+                current_position = self.current_position,
+                num_scheduled_tokens = num_scheduled_tokens,
+                "Insufficient device blocks for scheduled tokens - state sync issue with vLLM"
+            );
+            return Err(SlotError::InvalidOperation(format!(
+                "Insufficient device blocks: need {} slots but have {} (current_pos={}, scheduled={})",
+                next_position, capacity, self.current_position, num_scheduled_tokens
+            )));
+        }
 
         if next_position > self.sequence.total_tokens() {
             // vllm stopped providing tokens, so we are done
@@ -805,19 +916,19 @@ impl Slot for VllmConnectorSlot {
             // Convert cached tokens to blocks (rounding up)
             let host_blocks = (self.tokens_cached_from_host + block_size - 1) / block_size;
             let disk_blocks = (self.tokens_cached_from_disk + block_size - 1) / block_size;
+            let object_blocks = (self.tokens_cached_from_g4 + block_size - 1) / block_size;
 
             tracing::debug!(
                 request_id = %self.request_id,
-                "Reporting cache stats: host_blocks={}, disk_blocks={}, total_blocks_queried={}, tokens_from_host={}, tokens_from_disk={}",
-                host_blocks,
-                disk_blocks,
-                self.total_blocks_queried,
-                self.tokens_cached_from_host,
-                self.tokens_cached_from_disk
+                host_blocks = host_blocks,
+                disk_blocks = disk_blocks,
+                object_blocks = object_blocks,
+                total_blocks_queried = self.total_blocks_queried,
+                "Reporting cache stats"
             );
 
             self.cache_stats
-                .record(host_blocks, disk_blocks, self.total_blocks_queried);
+                .record(host_blocks, disk_blocks, object_blocks, self.total_blocks_queried);
         }
 
         // Check if there are any pending operations
@@ -921,6 +1032,9 @@ impl Slot for VllmConnectorSlot {
             // Skip G4 (remote) lookup on retry to prevent infinite loops
             // when remote storage has stale registry entries (NoSuchKey errors)
             self.skip_g4_on_retry = true;
+            // Mark that we've recovered - next apply_scheduler_output should ignore
+            // vLLM's stale num_computed_tokens
+            self.recovered_from_failed_transfer = true;
         }
 
         if !matches!(self.state(), SlotState::Initialized | SlotState::Preempted) {
@@ -1668,6 +1782,7 @@ impl LocalTransferEngine {
                                 uuid: operation_id,
                                 requirement: None,
                                 request_type: RequestType::Immediate, // Immediate = completes instantly
+                                chained: false,
                             }),
                             sequence_hashes: None,
                         };
@@ -1915,6 +2030,7 @@ where
             uuid: offload_req.operation_id,
             requirement: None,
             request_type: RequestType::Scheduled,
+            chained: false,
         }),
         sequence_hashes,
     };
@@ -1944,12 +2060,24 @@ where
         storage_name
     );
 
-    let should_h2o = transfer_pool == BlockTransferPool::Host && leader.remote_registry_enabled();
-    if let Some(remote_tx) = remote_tx.filter(|_| should_h2o) {
-        // Get host block IDs from the just-registered immutable blocks
-        let host_block_ids: Vec<BlockId> = immutable_blocks.iter().map(|b| b.block_id()).collect();
+    // limit concurrent H2O transfers to prevent host memory exhaustion.
+    let current_h2o = pin_registry.len();
+    let should_h2o = transfer_pool == BlockTransferPool::Host
+        && leader.remote_registry_enabled()
+        && current_h2o < *MAX_CONCURRENT_H2O;
 
-        // Create a unique ID for this H2O operation (also used as pin ID)
+    if transfer_pool == BlockTransferPool::Host && leader.remote_registry_enabled() && !should_h2o {
+        tracing::warn!(
+            request_id = request_id,
+            current_h2o = current_h2o,
+            max_h2o = *MAX_CONCURRENT_H2O,
+            num_blocks = offload_req.sequence_hashes.len(),
+            "Skipping H2O transfer due to backpressure"
+        );
+    }
+
+    if let Some(remote_tx) = remote_tx.filter(|_| should_h2o) {
+        let host_block_ids: Vec<BlockId> = immutable_blocks.iter().map(|b| b.block_id()).collect();
         let h2o_operation_id = uuid::Uuid::new_v4();
 
         // Pin the host blocks to prevent eviction during H2O transfer.
@@ -1973,10 +2101,10 @@ where
             host_block_ids,
             h2o_operation_id,
             offload_req.block_size,
-            h2o_operation_id, // Use same ID for pin lookup
+            h2o_operation_id,
         );
 
-        tracing::info!(
+        tracing::debug!(
             request_id = request_id,
             operation_id = %h2o_operation_id,
             num_blocks = offload_req.sequence_hashes.len(),
@@ -2040,6 +2168,7 @@ async fn process_onboard_request(
             uuid: *operation_id,
             requirement: None,
             request_type: RequestType::Immediate,
+            chained: false,
         }),
         sequence_hashes: None,
     };
@@ -2325,13 +2454,6 @@ async fn process_remote_transfer_request(
 
     let num_blocks = hashes_with_positions.len();
 
-    // Update metrics
-    if req.is_onboard {
-        kvbm_metrics.onboard_blocks_o2d.inc_by(num_blocks as u64);
-    } else {
-        kvbm_metrics.offload_blocks_d2o.inc_by(num_blocks as u64);
-    }
-
     let direction = if req.is_onboard {
         "onboard"
     } else if req.is_h2o() {
@@ -2378,6 +2500,12 @@ async fn process_remote_transfer_request(
     .await?;
 
     // Create wire-format request for ZMQ transport
+    //
+    // Chained flag determines if this operation increments the completion counter:
+    // - H2O (offload to object): chained=true, follows D2H which is already tracked
+    // - O2D (onboard from object): chained=false, standalone operation that must be tracked
+    let is_chained = !req.is_onboard;
+
     let wire_req =
         dynamo_llm::block_manager::distributed::RemoteTransferRequest::new_with_connector_req(
             req.request_id.clone(),
@@ -2388,20 +2516,29 @@ async fn process_remote_transfer_request(
                 uuid: *operation_id,
                 requirement: None,
                 request_type: RequestType::Immediate,
+                chained: is_chained,
             },
         );
 
-    // Send to worker and wait for completion
     let notify_receiver = leader.remote_transfer_request(wire_req).await?;
 
-    let result = match notify_receiver.await {
-        Ok(_) => {
+    let result = match tokio::time::timeout(*G4_TRANSFER_TIMEOUT, notify_receiver).await {
+        Ok(Ok(_)) => {
             tracing::debug!(
                 target = "kvbm-g4",
                 request_id = %request_id,
                 operation_id = %operation_id,
-                "Remote transfer completed successfully"
+                num_blocks = num_blocks,
+                direction = if req.is_onboard { "onboard" } else { "offload" },
+                "G4 transfer completed"
             );
+
+            // Track success metrics
+            if req.is_onboard {
+                kvbm_metrics.onboard_blocks_o2d.inc_by(num_blocks as u64);
+            } else {
+                kvbm_metrics.offload_blocks_d2o.inc_by(num_blocks as u64);
+            }
 
             // Register with remote registry after successful offload
             if !req.is_onboard {
@@ -2416,14 +2553,40 @@ async fn process_remote_transfer_request(
 
             Ok(())
         }
-        Err(_) => {
+        Ok(Err(_)) => {
             tracing::error!(
                 request_id = %request_id,
                 operation_id = %operation_id,
+                num_blocks = num_blocks,
                 "Remote transfer completion notification failed"
             );
+            // Track failure metrics
+            if req.is_onboard {
+                kvbm_metrics.record_object_read_failure(num_blocks as u64);
+            } else {
+                kvbm_metrics.record_object_write_failure(num_blocks as u64);
+            }
             Err(anyhow::anyhow!(
                 "Remote transfer completion notification failed"
+            ))
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                request_id = %request_id,
+                operation_id = %operation_id,
+                num_blocks = num_blocks,
+                timeout_secs = G4_TRANSFER_TIMEOUT.as_secs(),
+                "Remote transfer timed out (adjust with DYN_KVBM_G4_TRANSFER_TIMEOUT_SECS)"
+            );
+            // Track failure metrics
+            if req.is_onboard {
+                kvbm_metrics.record_object_read_failure(num_blocks as u64);
+            } else {
+                kvbm_metrics.record_object_write_failure(num_blocks as u64);
+            }
+            Err(anyhow::anyhow!(
+                "Remote transfer timed out after {} seconds",
+                G4_TRANSFER_TIMEOUT.as_secs()
             ))
         }
     };

@@ -51,6 +51,7 @@ impl TransferSchedulerClient {
                 let handle = ImmediateTransferCompletionHandle::new(
                     request.request_id,
                     request.uuid,
+                    request.chained,
                     scheduler_tx.clone(),
                 );
                 Ok(Box::new(handle))
@@ -479,7 +480,7 @@ impl Scheduler {
         );
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(request_id = %result.request_id, operation_id = %result.uuid))]
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id = %result.request_id, operation_id = %result.uuid, chained = %result.chained))]
     fn handle_immediate_result(&mut self, result: ImmediateTransferResult) {
         // Send failure notification to worker (non-blocking)
         if result.status.is_err() {
@@ -493,6 +494,13 @@ impl Scheduler {
             let _ = self
                 .failure_tx
                 .send((result.request_id.clone(), result.uuid));
+        }
+
+        // Chained operations (e.g., H2O after D2H) do NOT increment the counter.
+        // They share tracking with the parent operation that was enqueued to the worker.
+        if result.chained {
+            tracing::debug!("chained operation completed; skipping counter increment");
+            return;
         }
 
         match self.slots.get_mut(&result.request_id) {
@@ -743,6 +751,7 @@ mod tests {
             uuid: operation_id,
             requirement: None,
             request_type: RequestType::Immediate,
+            chained: false,
         };
 
         let handle = transfer_client
@@ -813,6 +822,7 @@ mod tests {
             uuid: operation_id,
             requirement: None,
             request_type: RequestType::Immediate,
+            chained: false,
         };
 
         let handle = transfer_client
@@ -896,6 +906,7 @@ mod tests {
             uuid: operation_id,
             requirement: None,
             request_type: RequestType::Scheduled,
+            chained: false,
         };
 
         // transfer arrives first
@@ -1003,6 +1014,7 @@ mod tests {
             uuid: operation_id,
             requirement: None,
             request_type: RequestType::Scheduled,
+            chained: false,
         };
 
         // transfer arrives last
@@ -1055,6 +1067,7 @@ mod tests {
             uuid: operation_id,
             requirement: None,
             request_type: RequestType::Scheduled,
+            chained: false,
         };
 
         // allows us to pause the transfer task after the scheduler decision is made

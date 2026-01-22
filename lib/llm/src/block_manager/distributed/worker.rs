@@ -104,11 +104,30 @@ pub fn load_and_validate_tensors(
 fn build_agent(worker_id: usize, use_gds: bool) -> anyhow::Result<NixlAgent> {
     let agent = NixlAgent::new(&format!("kvbm-worker-{}", worker_id))?;
     if use_gds {
-        let (_, gds_params) = agent.get_plugin_params("GDS_MT")?;
-        agent.create_backend("GDS_MT", &gds_params)?;
+        match agent.get_plugin_params("GDS_MT") {
+            Ok((_, gds_params)) => {
+                agent.create_backend("GDS_MT", &gds_params)?;
+                tracing::info!(
+                    worker_id = worker_id,
+                    "Created GDS_MT backend for multi-threaded file I/O"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    worker_id = worker_id,
+                    error = %e,
+                    "GDS_MT plugin not available, falling back to POSIX only"
+                );
+            }
+        }
     }
     let (_, posix_params) = agent.get_plugin_params("POSIX")?;
     agent.create_backend("POSIX", &posix_params)?;
+    tracing::debug!(
+        worker_id = worker_id,
+        use_gds = use_gds,
+        "Created NIXL agent with POSIX backend"
+    );
 
     // Check if object storage should be enabled
     // Enabled when DYN_KVBM_OBJECT_BUCKET is set
@@ -268,7 +287,17 @@ async fn perform_allocation_and_build_handler(
             transfer_handler: Arc::new(handler) as Arc<dyn BlockTransferHandler>,
         })
     } else {
-        let agent = build_agent(worker_id, leader_meta.num_disk_blocks > 0)?;
+        // Determine if GDS_MT backend should be enabled:
+        // - For local disk cache (G3): enabled if disk blocks are configured
+        // - For remote disk storage (G4): enabled if DYN_KVBM_REMOTE_DISK_PATH is set
+        //   and DYN_KVBM_REMOTE_DISK_USE_GDS is true (default: true)
+        let use_gds_for_local_disk = leader_meta.num_disk_blocks > 0;
+        let use_gds_for_remote_disk = std::env::var("DYN_KVBM_REMOTE_DISK_PATH").is_ok()
+            && std::env::var("DYN_KVBM_REMOTE_DISK_USE_GDS")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true);
+
+        let agent = build_agent(worker_id, use_gds_for_local_disk || use_gds_for_remote_disk)?;
         let pool_config = PoolConfig {
             enable_pool: true,
             max_concurrent_transfers: MAX_CONCURRENT_TRANSFERS,
