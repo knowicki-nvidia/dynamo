@@ -241,7 +241,6 @@ class MultimodalWorkerHandler(BaseWorkerHandler):
         config: Config,
         prefill_client: Client = None,
     ):
-        #super().__init__(component, engine, config, None, prefill_client)
         super().__init__(component, engine, config, None)
 
         # Initialize processors
