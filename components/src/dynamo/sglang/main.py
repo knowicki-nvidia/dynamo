@@ -71,6 +71,10 @@ async def worker():
     dump_config(config.dynamo_args.dump_config_to, config)
 
     loop = asyncio.get_running_loop()
+
+    # Create shutdown event
+    shutdown_event = asyncio.Event()
+
     # Enable NATS based on use_kv_events flag (derived from kv_events_config)
     runtime = DistributedRuntime(
         loop,
@@ -80,33 +84,35 @@ async def worker():
     )
 
     def signal_handler():
-        asyncio.create_task(graceful_shutdown(runtime))
+        asyncio.create_task(graceful_shutdown(runtime, shutdown_event))
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, signal_handler)
 
-    logging.info("Signal handlers will trigger a graceful shutdown of the runtime")
+    logging.info("Signal handlers will trigger a graceful shutdown")
 
     if config.dynamo_args.embedding_worker:
-        await init_embedding(runtime, config)
+        await init_embedding(runtime, config, shutdown_event)
     elif config.dynamo_args.multimodal_processor:
-        await init_multimodal_processor(runtime, config)
+        await init_multimodal_processor(runtime, config, shutdown_event)
     elif config.dynamo_args.multimodal_encode_worker:
-        await init_multimodal_encode_worker(runtime, config)
+        await init_multimodal_encode_worker(runtime, config, shutdown_event)
     elif config.dynamo_args.multimodal_worker:
         if config.serving_mode != DisaggregationMode.PREFILL:
-            await init_multimodal_worker(runtime, config)
+            await init_multimodal_worker(runtime, config, shutdown_event)
         else:
-            await init_multimodal_prefill_worker(runtime, config)
+            await init_multimodal_prefill_worker(runtime, config, shutdown_event)
     elif config.dynamo_args.diffusion_worker:
-        await init_diffusion(runtime, config)
+        await init_diffusion(runtime, config, shutdown_event)
     elif config.serving_mode != DisaggregationMode.PREFILL:
-        await init(runtime, config)
+        await init(runtime, config, shutdown_event)
     else:
-        await init_prefill(runtime, config)
+        await init_prefill(runtime, config, shutdown_event)
 
 
-async def init(runtime: DistributedRuntime, config: Config):
+async def init(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
     # Prevent SGLang from blocking on non-leader nodes
@@ -140,7 +146,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     ready_event = asyncio.Event()
 
     handler = DecodeWorkerHandler(
-        component, engine, config, publisher, generate_endpoint
+        component, engine, config, publisher, generate_endpoint, shutdown_event
     )
     handler.register_engine_routes(runtime)
 
@@ -193,7 +199,9 @@ async def init(runtime: DistributedRuntime, config: Config):
         handler.cleanup()
 
 
-async def init_prefill(runtime: DistributedRuntime, config: Config):
+async def init_prefill(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
     # Prevent SGLang from blocking on non-leader nodes
@@ -228,7 +236,7 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
         setup_prometheus_registry(engine, generate_endpoint)
 
     handler = PrefillWorkerHandler(
-        component, engine, config, publisher, generate_endpoint
+        component, engine, config, publisher, generate_endpoint, shutdown_event
     )
     handler.register_engine_routes(runtime)
 
@@ -270,7 +278,9 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
         handler.cleanup()
 
 
-async def init_diffusion(runtime: DistributedRuntime, config: Config):
+async def init_diffusion(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     """Initialize diffusion language model worker component"""
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
@@ -312,7 +322,7 @@ async def init_diffusion(runtime: DistributedRuntime, config: Config):
     ready_event = asyncio.Event()
 
     handler = DiffusionWorkerHandler(
-        component, engine, config, publisher, generate_endpoint
+        component, engine, config, publisher, generate_endpoint, shutdown_event
     )
     handler.register_engine_routes(runtime)
 
@@ -355,7 +365,9 @@ async def init_diffusion(runtime: DistributedRuntime, config: Config):
         handler.cleanup()
 
 
-async def init_embedding(runtime: DistributedRuntime, config: Config):
+async def init_embedding(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     """Initialize embedding worker component"""
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
@@ -379,7 +391,9 @@ async def init_embedding(runtime: DistributedRuntime, config: Config):
     # Readiness gate: requests wait until model is registered
     ready_event = asyncio.Event()
 
-    handler = EmbeddingWorkerHandler(component, engine, config, publisher)
+    handler = EmbeddingWorkerHandler(
+        component, engine, config, publisher, shutdown_event
+    )
     health_check_payload = SglangHealthCheckPayload(
         engine, use_text_input=dynamo_args.use_sglang_tokenizer
     ).to_dict()
@@ -417,7 +431,9 @@ async def init_embedding(runtime: DistributedRuntime, config: Config):
         handler.cleanup()
 
 
-async def init_multimodal_processor(runtime: DistributedRuntime, config: Config):
+async def init_multimodal_processor(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     """Initialize multimodal processor component"""
     server_args, dynamo_args = config.server_args, config.dynamo_args
     component = runtime.namespace(dynamo_args.namespace).component(
@@ -436,7 +452,9 @@ async def init_multimodal_processor(runtime: DistributedRuntime, config: Config)
 
     ready_event = asyncio.Event()
 
-    handler = MultimodalProcessorHandler(component, config, encode_worker_client)
+    handler = MultimodalProcessorHandler(
+        component, config, encode_worker_client, shutdown_event
+    )
 
     logging.info("Waiting for Encoder Worker Instances ...")
     await encode_worker_client.wait_for_instances()
@@ -464,7 +482,9 @@ async def init_multimodal_processor(runtime: DistributedRuntime, config: Config)
         handler.cleanup()
 
 
-async def init_multimodal_encode_worker(runtime: DistributedRuntime, config: Config):
+async def init_multimodal_encode_worker(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     """Initialize multimodal encode worker component"""
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
@@ -482,7 +502,9 @@ async def init_multimodal_encode_worker(runtime: DistributedRuntime, config: Con
         .client()
     )
 
-    handler = MultimodalEncodeWorkerHandler(component, config, pd_worker_client)
+    handler = MultimodalEncodeWorkerHandler(
+        component, config, pd_worker_client, shutdown_event
+    )
     await handler.async_init(runtime)
 
     await pd_worker_client.wait_for_instances()
@@ -512,7 +534,9 @@ async def init_multimodal_encode_worker(runtime: DistributedRuntime, config: Con
         handler.cleanup()
 
 
-async def init_multimodal_worker(runtime: DistributedRuntime, config: Config):
+async def init_multimodal_worker(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     """Initialize multimodal worker component for aggregated or decode mode"""
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
@@ -532,9 +556,13 @@ async def init_multimodal_worker(runtime: DistributedRuntime, config: Config):
             .endpoint("generate")
             .client()
         )
-        handler = MultimodalWorkerHandler(component, engine, config, prefill_client)
+        handler = MultimodalWorkerHandler(
+            component, engine, config, prefill_client, shutdown_event
+        )
     else:
-        handler = MultimodalWorkerHandler(component, engine, config)
+        handler = MultimodalWorkerHandler(
+            component, engine, config, shutdown_event=shutdown_event
+        )
 
     await handler.async_init()
 
@@ -564,7 +592,9 @@ async def init_multimodal_worker(runtime: DistributedRuntime, config: Config):
         handler.cleanup()
 
 
-async def init_multimodal_prefill_worker(runtime: DistributedRuntime, config: Config):
+async def init_multimodal_prefill_worker(
+    runtime: DistributedRuntime, config: Config, shutdown_event: asyncio.Event
+):
     """Initialize multimodal prefill worker component"""
     server_args, dynamo_args = config.server_args, config.dynamo_args
 
@@ -576,7 +606,7 @@ async def init_multimodal_prefill_worker(runtime: DistributedRuntime, config: Co
 
     generate_endpoint = component.endpoint(dynamo_args.endpoint)
 
-    handler = MultimodalPrefillWorkerHandler(component, engine, config)
+    handler = MultimodalPrefillWorkerHandler(component, engine, config, shutdown_event)
     await handler.async_init()
 
     health_check_payload = SglangPrefillHealthCheckPayload(engine).to_dict()
@@ -640,8 +670,9 @@ async def _warmup_prefill_engine(engine: sgl.Engine, server_args) -> None:
         logging.warning(f"Prefill warmup failed: {e}")
 
 
-async def graceful_shutdown(runtime):
+async def graceful_shutdown(runtime, shutdown_event):
     logging.info("Received shutdown signal, shutting down DistributedRuntime")
+    shutdown_event.set()
     runtime.shutdown()
     logging.info("DistributedRuntime shutdown complete")
 

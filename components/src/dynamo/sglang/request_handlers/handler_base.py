@@ -28,6 +28,7 @@ class BaseWorkerHandler(ABC):
         config: Config,
         publisher: Optional[DynamoSglangPublisher] = None,
         generate_endpoint=None,
+        shutdown_event: Optional[asyncio.Event] = None,
     ) -> None:
         """Initialize base worker handler.
 
@@ -37,11 +38,13 @@ class BaseWorkerHandler(ABC):
             config: SGLang and Dynamo configuration.
             publisher: Optional metrics publisher for the worker.
             generate_endpoint: The endpoint handle for discovery registration.
+            shutdown_event: Optional event to signal graceful shutdown.
         """
         self.component = component
         self.engine = engine
         self.config = config
         self.generate_endpoint = generate_endpoint
+        self.shutdown_event = shutdown_event
         if publisher is not None:
             self.metrics_publisher = publisher.metrics_publisher
             self.kv_publisher = publisher.kv_publisher

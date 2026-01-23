@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import time
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import sglang as sgl
 
@@ -24,6 +24,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         config: Config,
         publisher: DynamoSglangPublisher,
         generate_endpoint=None,
+        shutdown_event: Optional[asyncio.Event] = None,
     ) -> None:
         """Initialize decode worker handler.
 
@@ -33,6 +34,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             config: SGLang and Dynamo configuration.
             publisher: Metrics publisher for the worker.
             generate_endpoint: The endpoint handle for discovery registration.
+            shutdown_event: Optional event to signal graceful shutdown.
         """
         super().__init__(
             component,
@@ -40,6 +42,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             config,
             publisher,
             generate_endpoint,
+            shutdown_event,
         )
         if self.serving_mode == DisaggregationMode.DECODE:
             logging.info(
@@ -197,6 +200,14 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         request_id_future = asyncio.Future()
         async with self._cancellation_monitor(request_id_future, context):
             async for res in stream_source:
+                # Check for shutdown during streaming
+                if self.shutdown_event and self.shutdown_event.is_set():
+                    logging.info(f"Shutdown detected, aborting request {context.id()}")
+                    self.engine.shutdown()
+                    raise GeneratorExit(
+                        "Decode engine was shut down during token generation"
+                    )
+
                 # Extract SGLang request ID from the first response and set the future
                 if not request_id_future.done():
                     meta_info = res.get("meta_info", {})
@@ -260,6 +271,15 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         request_id_future = asyncio.Future()
         async with self._cancellation_monitor(request_id_future, context):
             async for res in stream_source:
+                # Check for shutdown during streaming
+                if self.shutdown_event and self.shutdown_event.is_set():
+                    logging.info(f"Shutdown detected, aborting request {context.id()}")
+                    self.engine.shutdown()
+                    logging.info("Decode engine shutdown")
+                    raise GeneratorExit(
+                        "Decode engine was shut down during token generation"
+                    )
+
                 # Extract SGLang request ID from the first response and set the future
                 if not request_id_future.done():
                     meta_info = res.get("meta_info", {})
