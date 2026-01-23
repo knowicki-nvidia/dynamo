@@ -25,6 +25,7 @@ default-members = [
     "lib/runtime",
     "lib/config",
     "lib/tokens",
+    "lib/memory",
     "lib/async-openai",
     "lib/parsers",
     "lib/bindings/c",
