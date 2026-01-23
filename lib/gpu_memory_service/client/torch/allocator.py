@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """GPU Memory Service allocator singleton management.
@@ -76,7 +76,9 @@ def _get_existing(
     if mode == RequestedLockType.RW:
         if current == GrantedLockType.RW:
             return _gms_client_memory_manager, _mem_pool
-        raise RuntimeError(f"Cannot get RW allocator: existing is in {current} mode")
+        raise RuntimeError(
+            f"Cannot get RW allocator: existing is in {current} mode"
+        )
 
     if mode == RequestedLockType.RO:
         if current == GrantedLockType.RO:

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 """Message types for GPU Memory Service RPC protocol."""
 
 from enum import Enum
@@ -11,7 +8,6 @@ import msgspec
 
 class RequestedLockType(str, Enum):
     """Lock type requested by client."""
-
     RW = "rw"
     RO = "ro"
     RW_OR_RO = "rw_or_ro"
@@ -19,7 +15,6 @@ class RequestedLockType(str, Enum):
 
 class GrantedLockType(str, Enum):
     """Lock type actually granted by server."""
-
     RW = "rw"
     RO = "ro"
 

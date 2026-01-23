@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """GPU Memory Service client-side memory manager.
@@ -79,26 +79,10 @@ class LocalMapping:
     access: GrantedLockType
 
     def with_handle(self, handle: int) -> "LocalMapping":
-        return LocalMapping(
-            self.allocation_id,
-            self.va,
-            self.size,
-            self.aligned_size,
-            handle,
-            self.tag,
-            self.access,
-        )
+        return LocalMapping(self.allocation_id, self.va, self.size, self.aligned_size, handle, self.tag, self.access)
 
     def with_access(self, access: GrantedLockType) -> "LocalMapping":
-        return LocalMapping(
-            self.allocation_id,
-            self.va,
-            self.size,
-            self.aligned_size,
-            self.handle,
-            self.tag,
-            access,
-        )
+        return LocalMapping(self.allocation_id, self.va, self.size, self.aligned_size, self.handle, self.tag, access)
 
 
 class GMSClientMemoryManager:
@@ -134,9 +118,7 @@ class GMSClientMemoryManager:
 
         # VA-stable sleep/wake state
         self._va_preserved = False
-        self._last_memory_layout_hash: str = (
-            ""  # Hash from server, saved on connect/commit
-        )
+        self._last_memory_layout_hash: str = ""  # Hash from server, saved on connect/commit
 
         # Ensure torch is on the right device for subsequent CUDA operations.
         if torch.cuda.is_available():
@@ -234,26 +216,22 @@ class GMSClientMemoryManager:
         try:
             allocation_id, server_aligned = client.allocate(aligned_size, tag)
             if int(server_aligned) != aligned_size:
-                raise RuntimeError(
-                    f"Alignment mismatch: {aligned_size} vs {server_aligned}"
-                )
+                raise RuntimeError(f"Alignment mismatch: {aligned_size} vs {server_aligned}")
 
             fd = client.export(allocation_id)
             handle = import_handle_from_fd(fd)
             map_to_va(va, aligned_size, handle)
             set_access(va, aligned_size, self.device, GrantedLockType.RW)
 
-            self._track_mapping(
-                LocalMapping(
-                    allocation_id=allocation_id,
-                    va=va,
-                    size=size,
-                    aligned_size=aligned_size,
-                    handle=handle,
-                    tag=tag,
-                    access=GrantedLockType.RW,
-                )
-            )
+            self._track_mapping(LocalMapping(
+                allocation_id=allocation_id,
+                va=va,
+                size=size,
+                aligned_size=aligned_size,
+                handle=handle,
+                tag=tag,
+                access=GrantedLockType.RW,
+            ))
             return va
         except Exception:
             free_va(va, aligned_size)
@@ -434,18 +412,11 @@ class GMSClientMemoryManager:
             torch.cuda.set_device(self.device)
 
         eff_timeout = timeout_ms if timeout_ms is not None else self._timeout_ms
-        self._connect(
-            lock_type=RequestedLockType.RO,
-            timeout_ms=eff_timeout,
-            update_memory_layout_hash=False,
-        )
+        self._connect(lock_type=RequestedLockType.RO, timeout_ms=eff_timeout, update_memory_layout_hash=False)
 
         # Check if memory layout changed while sleeping
         current_hash = self._client_rpc.get_memory_layout_hash()
-        if (
-            self._last_memory_layout_hash
-            and current_hash != self._last_memory_layout_hash
-        ):
+        if self._last_memory_layout_hash and current_hash != self._last_memory_layout_hash:
             raise StaleMemoryLayoutError(
                 f"State changed while sleeping: hash {self._last_memory_layout_hash[:16]}... -> {current_hash[:16]}..."
             )
@@ -543,15 +514,11 @@ class GMSClientMemoryManager:
             try:
                 unmap(va, mapping.aligned_size)
                 release_handle(mapping.handle)
-                self._mappings[va] = mapping.with_handle(
-                    0
-                )  # Mark unmapped, VA reserved
+                self._mappings[va] = mapping.with_handle(0)  # Mark unmapped, VA reserved
                 unmapped_count += 1
                 total_bytes += mapping.aligned_size
             except Exception as e:
-                logger.warning(
-                    f"Error unmapping VA 0x{va:x} (preserving reservation): {e}"
-                )
+                logger.warning(f"Error unmapping VA 0x{va:x} (preserving reservation): {e}")
         logger.info(
             f"[GPU Memory Service] Unmapped {unmapped_count} allocations ({total_bytes / (1 << 30):.2f} GiB), "
             f"preserving {len(self._mappings)} VA reservations"
@@ -589,9 +556,7 @@ class GMSClientMemoryManager:
         try:
             alloc_info = client.get_allocation(allocation_id)
         except Exception as e:
-            raise StaleMemoryLayoutError(
-                f"Allocation {allocation_id} no longer exists on server: {e}"
-            ) from e
+            raise StaleMemoryLayoutError(f"Allocation {allocation_id} no longer exists on server: {e}") from e
 
         server_aligned_size = int(alloc_info.aligned_size)
         if server_aligned_size != mapping.aligned_size:

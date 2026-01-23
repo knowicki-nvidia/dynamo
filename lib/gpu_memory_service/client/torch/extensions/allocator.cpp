@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Minimal CUDAPluggableAllocator shim for GPU Memory Service.
 //
 // This extension provides the my_malloc/my_free function pointers required by
@@ -97,7 +94,8 @@ py_init_module(PyObject* self, PyObject* args)
 }
 
 static PyMethodDef module_methods[] = {
-    {"init_module", py_init_module, METH_VARARGS, "Set malloc/free callbacks"}, {nullptr, nullptr, 0, nullptr}};
+    {"init_module", py_init_module, METH_VARARGS, "Set malloc/free callbacks"},
+    {nullptr, nullptr, 0, nullptr}};
 
 static struct PyModuleDef allocator_module = {
     PyModuleDef_HEAD_INIT, "_allocator_ext", "CUDAPluggableAllocator shim for GPU Memory Service", -1, module_methods};

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """Connection and state machine for GPU Memory Service.
@@ -30,12 +30,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Set
 
 from gpu_memory_service.common.types import (
-    RO_ALLOWED,
-    RW_ALLOWED,
-    RW_REQUIRED,
     GrantedLockType,
     ServerState,
     StateEvent,
+    RW_ALLOWED,
+    RW_REQUIRED,
+    RO_ALLOWED,
 )
 
 logger = logging.getLogger(__name__)

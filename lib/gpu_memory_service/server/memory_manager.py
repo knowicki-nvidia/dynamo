@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 """CUDA VMM allocation manager - pure business logic, no threading/transport.
 
 This module contains the GMSServerMemoryManager class which handles physical GPU memory
@@ -76,9 +73,7 @@ class GMSServerMemoryManager:
         self._allocations: Dict[str, AllocationInfo] = {}
         ensure_cuda_initialized()
         self._granularity = get_allocation_granularity(device)
-        logger.info(
-            f"GMSServerMemoryManager initialized: device={device}, granularity={self._granularity}"
-        )
+        logger.info(f"GMSServerMemoryManager initialized: device={device}, granularity={self._granularity}")
 
     @property
     def device(self) -> int:
@@ -129,9 +124,7 @@ class GMSServerMemoryManager:
         prop.type = cuda.CUmemAllocationType.CU_MEM_ALLOCATION_TYPE_PINNED
         prop.location.type = cuda.CUmemLocationType.CU_MEM_LOCATION_TYPE_DEVICE
         prop.location.id = self._device
-        prop.requestedHandleTypes = (
-            cuda.CUmemAllocationHandleType.CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
-        )
+        prop.requestedHandleTypes = cuda.CUmemAllocationHandleType.CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
 
         result, handle = cuda.cuMemCreate(aligned_size, prop, 0)
         check_cuda_result(result, "cuMemCreate")
@@ -145,9 +138,7 @@ class GMSServerMemoryManager:
             created_at=time.time(),
         )
         self._allocations[info.allocation_id] = info
-        logger.debug(
-            f"Allocated {info.allocation_id}: size={size}, aligned={aligned_size}, tag={tag}"
-        )
+        logger.debug(f"Allocated {info.allocation_id}: size={size}, aligned={aligned_size}, tag={tag}")
         return info
 
     def export_fd(self, allocation_id: str) -> int:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """Async Allocation RPC Server - Single-threaded event loop with explicit state machine.
@@ -20,33 +20,9 @@ import logging
 import os
 from typing import ClassVar, Optional
 
-from gpu_memory_service.common.protocol.messages import (
-    AllocateRequest,
-    ClearAllRequest,
-    CommitRequest,
-    CommitResponse,
-    ErrorResponse,
-    ExportRequest,
-    FreeRequest,
-    GetAllocationRequest,
-    GetAllocationStateRequest,
-    GetLockStateRequest,
-    GetStateHashRequest,
-    HandshakeRequest,
-    HandshakeResponse,
-    ListAllocationsRequest,
-    MetadataDeleteRequest,
-    MetadataGetRequest,
-    MetadataListRequest,
-    MetadataPutRequest,
-)
-from gpu_memory_service.common.protocol.wire import recv_message, send_message
-from gpu_memory_service.common.types import (
-    GrantedLockType,
-    RequestedLockType,
-    ServerState,
-    StateEvent,
-)
+from gpu_memory_service.common.protocol.messages import *  # noqa: F401,F403
+from gpu_memory_service.common.protocol.wire import *  # noqa: F401,F403
+from gpu_memory_service.common.types import GrantedLockType, RequestedLockType, ServerState, StateEvent
 
 from .handler import RequestHandler
 from .locking import Connection, GlobalLockFSM
@@ -334,16 +310,12 @@ class GMSRPCServer:
             return await self._handle_commit(conn)
 
         if msg_type is GetLockStateRequest:
-            return (
-                self._handler.handle_get_lock_state(
-                    self._sm.rw_conn is not None,
-                    self._sm.ro_count,
-                    self._waiting_writers,
-                    self._sm.committed,
-                ),
-                -1,
-                False,
-            )
+            return self._handler.handle_get_lock_state(
+                self._sm.rw_conn is not None,
+                self._sm.ro_count,
+                self._waiting_writers,
+                self._sm.committed,
+            ), -1, False
 
         if msg_type is GetAllocationStateRequest:
             return self._handler.handle_get_allocation_state(), -1, False

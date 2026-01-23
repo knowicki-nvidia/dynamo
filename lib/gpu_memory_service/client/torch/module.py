@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """Module tensor operations for GPU Memory Service.
@@ -15,7 +15,11 @@ import logging
 from typing import TYPE_CHECKING, Iterator, Tuple
 
 import torch
-from gpu_memory_service.client.torch.tensor import GMSTensorSpec, TensorMetadata
+
+from gpu_memory_service.client.torch.tensor import (
+    GMSTensorSpec,
+    TensorMetadata,
+)
 
 if TYPE_CHECKING:
     from gpu_memory_service.client.memory_manager import GMSClientMemoryManager
@@ -59,11 +63,7 @@ def _iter_module_tensors(
             yield (qualified, buf, "buffer")
 
     # Other tensor attributes (not params/buffers/submodules)
-    skip = (
-        set(module._parameters.keys())
-        | set(module._buffers.keys())
-        | set(module._modules.keys())
-    )
+    skip = set(module._parameters.keys()) | set(module._buffers.keys()) | set(module._modules.keys())
     for attr_name in dir(module):
         if attr_name in skip or attr_name.startswith("__"):
             continue
@@ -78,9 +78,7 @@ def _iter_module_tensors(
         elif isinstance(attr_val, (list, tuple)) and attr_val:
             if all(torch.is_tensor(x) and x.is_cuda for x in attr_val):
                 for i, x in enumerate(attr_val):
-                    qualified = (
-                        f"{prefix}{attr_name}.{i}" if prefix else f"{attr_name}.{i}"
-                    )
+                    qualified = f"{prefix}{attr_name}.{i}" if prefix else f"{attr_name}.{i}"
                     yield (qualified, x, "tensor_attr")
 
     # Recurse into submodules
@@ -146,7 +144,9 @@ def register_module_tensors(
             # No mapping matched - tensor pointer not in any GMS allocation
             if tensor_type == "parameter":
                 # Parameters are model weights - must be in GMS allocations
-                raise RuntimeError(f"Tensor {name!r} not found in any GMS allocation")
+                raise RuntimeError(
+                    f"Tensor {name!r} not found in any GMS allocation"
+                )
             # Buffers and tensor_attrs may be dynamically allocated (e.g., KV cache)
             logger.debug(
                 "[GMS] Skipping %s %r - not in GMS allocations", tensor_type, name
@@ -175,11 +175,7 @@ def materialize_module_from_gms(
 
         # Tensor attrs and buffers: clone since they may be mutated
         if tensor_type in ("tensor_attr", "buffer"):
-            if (
-                tensor_type == "buffer"
-                and hasattr(mod, "_buffers")
-                and attr in mod._buffers
-            ):
+            if tensor_type == "buffer" and hasattr(mod, "_buffers") and attr in mod._buffers:
                 mod._buffers[attr] = tensor.detach().clone()
             else:
                 setattr(mod, attr, tensor.detach().clone())
@@ -196,9 +192,7 @@ def materialize_module_from_gms(
                         f"gms={tuple(tensor.shape)}/{tensor.dtype}"
                     )
                 if param.is_meta or param.device != tensor.device:
-                    mod._parameters[attr] = torch.nn.Parameter(
-                        tensor, requires_grad=param.requires_grad
-                    )
+                    mod._parameters[attr] = torch.nn.Parameter(tensor, requires_grad=param.requires_grad)
                 else:
                     param.data = tensor
                 continue

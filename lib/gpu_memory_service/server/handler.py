@@ -1,34 +1,10 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 """Request handlers for GPU Memory Service."""
 
 import hashlib
 import logging
 from dataclasses import dataclass
 
-from gpu_memory_service.common.protocol.messages import (
-    AllocateRequest,
-    AllocateResponse,
-    ClearAllResponse,
-    FreeRequest,
-    FreeResponse,
-    GetAllocationRequest,
-    GetAllocationResponse,
-    GetAllocationStateResponse,
-    GetLockStateResponse,
-    GetStateHashResponse,
-    ListAllocationsRequest,
-    ListAllocationsResponse,
-    MetadataDeleteRequest,
-    MetadataDeleteResponse,
-    MetadataGetRequest,
-    MetadataGetResponse,
-    MetadataListRequest,
-    MetadataListResponse,
-    MetadataPutRequest,
-    MetadataPutResponse,
-)
+from gpu_memory_service.common.protocol.messages import *  # noqa: F401,F403
 from gpu_memory_service.common.types import derive_state
 
 from .memory_manager import AllocationNotFoundError, GMSServerMemoryManager
@@ -49,9 +25,7 @@ class RequestHandler:
     def __init__(self, device: int = 0):
         self._memory_manager = GMSServerMemoryManager(device)
         self._metadata: dict[str, MetadataEntry] = {}
-        self._memory_layout_hash: str = (
-            ""  # Hash of allocations + metadata, computed on commit
-        )
+        self._memory_layout_hash: str = ""  # Hash of allocations + metadata, computed on commit
         logger.info(f"RequestHandler initialized: device={device}")
 
     @property
@@ -74,12 +48,8 @@ class RequestHandler:
         """Compute hash of current allocations + metadata."""
         h = hashlib.sha256()
         # Hash allocations (sorted by ID for determinism)
-        for info in sorted(
-            self._memory_manager.list_allocations(), key=lambda x: x.allocation_id
-        ):
-            h.update(
-                f"{info.allocation_id}:{info.size}:{info.aligned_size}:{info.tag}".encode()
-            )
+        for info in sorted(self._memory_manager.list_allocations(), key=lambda x: x.allocation_id):
+            h.update(f"{info.allocation_id}:{info.size}:{info.aligned_size}:{info.tag}".encode())
         # Hash metadata (sorted by key for determinism)
         for key in sorted(self._metadata.keys()):
             entry = self._metadata[key]
@@ -199,9 +169,7 @@ class RequestHandler:
     # ==================== Metadata Operations ====================
 
     def handle_metadata_put(self, req: MetadataPutRequest) -> MetadataPutResponse:
-        self._metadata[req.key] = MetadataEntry(
-            req.allocation_id, req.offset_bytes, req.value
-        )
+        self._metadata[req.key] = MetadataEntry(req.allocation_id, req.offset_bytes, req.value)
         return MetadataPutResponse(success=True)
 
     def handle_metadata_get(self, req: MetadataGetRequest) -> MetadataGetResponse:
@@ -215,19 +183,11 @@ class RequestHandler:
             value=entry.value,
         )
 
-    def handle_metadata_delete(
-        self, req: MetadataDeleteRequest
-    ) -> MetadataDeleteResponse:
-        return MetadataDeleteResponse(
-            deleted=self._metadata.pop(req.key, None) is not None
-        )
+    def handle_metadata_delete(self, req: MetadataDeleteRequest) -> MetadataDeleteResponse:
+        return MetadataDeleteResponse(deleted=self._metadata.pop(req.key, None) is not None)
 
     def handle_metadata_list(self, req: MetadataListRequest) -> MetadataListResponse:
-        keys = (
-            [k for k in self._metadata if k.startswith(req.prefix)]
-            if req.prefix
-            else list(self._metadata)
-        )
+        keys = [k for k in self._metadata if k.startswith(req.prefix)] if req.prefix else list(self._metadata)
         return MetadataListResponse(keys=sorted(keys))
 
     def handle_get_memory_layout_hash(self) -> GetStateHashResponse:

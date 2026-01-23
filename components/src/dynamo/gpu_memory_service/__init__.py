@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """GPU Memory Service component for Dynamo.
@@ -18,7 +18,9 @@ from gpu_memory_service import (
 )
 
 # Re-export extensions (built separately)
-from gpu_memory_service.client.torch.extensions import _allocator_ext
+from gpu_memory_service.client.torch.extensions import (
+    _allocator_ext,
+)
 
 # Re-export module utilities
 from gpu_memory_service.client.torch.module import (

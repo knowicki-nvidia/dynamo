@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """GPU Memory Service RPC Client.
@@ -32,44 +32,9 @@ import logging
 import socket
 from typing import Dict, List, Optional, Tuple, Type, TypeVar
 
-from gpu_memory_service.common.protocol.messages import (
-    AllocateRequest,
-    AllocateResponse,
-    ClearAllRequest,
-    ClearAllResponse,
-    CommitRequest,
-    CommitResponse,
-    ErrorResponse,
-    ExportRequest,
-    FreeRequest,
-    FreeResponse,
-    GetAllocationRequest,
-    GetAllocationResponse,
-    GetAllocationStateRequest,
-    GetAllocationStateResponse,
-    GetLockStateRequest,
-    GetLockStateResponse,
-    GetStateHashRequest,
-    GetStateHashResponse,
-    HandshakeRequest,
-    HandshakeResponse,
-    ListAllocationsRequest,
-    ListAllocationsResponse,
-    MetadataDeleteRequest,
-    MetadataDeleteResponse,
-    MetadataGetRequest,
-    MetadataGetResponse,
-    MetadataListRequest,
-    MetadataListResponse,
-    MetadataPutRequest,
-    MetadataPutResponse,
-)
-from gpu_memory_service.common.protocol.wire import recv_message_sync, send_message_sync
-from gpu_memory_service.common.types import (
-    RW_REQUIRED,
-    GrantedLockType,
-    RequestedLockType,
-)
+from gpu_memory_service.common.protocol.messages import *  # noqa: F401,F403
+from gpu_memory_service.common.protocol.wire import *  # noqa: F401,F403
+from gpu_memory_service.common.types import GrantedLockType, RequestedLockType, RW_REQUIRED
 
 T = TypeVar("T")
 
@@ -238,9 +203,7 @@ class GMSRPCClient:
             )
             self.close()
             try:
-                ro = GMSRPCClient(
-                    self.socket_path, lock_type=RequestedLockType.RO, timeout_ms=1000
-                )
+                ro = GMSRPCClient(self.socket_path, lock_type=RequestedLockType.RO, timeout_ms=1000)
                 try:
                     ok = ro.committed
                 finally:
@@ -269,19 +232,13 @@ class GMSRPCClient:
         return fd
 
     def get_allocation(self, allocation_id: str) -> GetAllocationResponse:
-        return self._call(
-            GetAllocationRequest(allocation_id=allocation_id), GetAllocationResponse
-        )
+        return self._call(GetAllocationRequest(allocation_id=allocation_id), GetAllocationResponse)
 
     def list_allocations(self, tag: Optional[str] = None) -> List[Dict]:
-        return self._call(
-            ListAllocationsRequest(tag=tag), ListAllocationsResponse
-        ).allocations
+        return self._call(ListAllocationsRequest(tag=tag), ListAllocationsResponse).allocations
 
     def free(self, allocation_id: str) -> bool:
-        return self._call(
-            FreeRequest(allocation_id=allocation_id), FreeResponse
-        ).success
+        return self._call(FreeRequest(allocation_id=allocation_id), FreeResponse).success
 
     def clear_all(self) -> int:
         return self._call(ClearAllRequest(), ClearAllResponse).cleared_count
@@ -289,9 +246,7 @@ class GMSRPCClient:
     def metadata_put(
         self, key: str, allocation_id: str, offset_bytes: int, value: bytes
     ) -> bool:
-        req = MetadataPutRequest(
-            key=key, allocation_id=allocation_id, offset_bytes=offset_bytes, value=value
-        )
+        req = MetadataPutRequest(key=key, allocation_id=allocation_id, offset_bytes=offset_bytes, value=value)
         return self._call(req, MetadataPutResponse).success
 
     def metadata_get(self, key: str) -> Optional[tuple[str, int, bytes]]:
@@ -300,18 +255,14 @@ class GMSRPCClient:
         return (r.allocation_id, r.offset_bytes, r.value) if r.found else None
 
     def metadata_delete(self, key: str) -> bool:
-        return self._call(
-            MetadataDeleteRequest(key=key), MetadataDeleteResponse
-        ).deleted
+        return self._call(MetadataDeleteRequest(key=key), MetadataDeleteResponse).deleted
 
     def metadata_list(self, prefix: str = "") -> List[str]:
         return self._call(MetadataListRequest(prefix=prefix), MetadataListResponse).keys
 
     def get_memory_layout_hash(self) -> str:
         """Get state hash (hash of allocations + metadata). Empty if not committed."""
-        return self._call(
-            GetStateHashRequest(), GetStateHashResponse
-        ).memory_layout_hash
+        return self._call(GetStateHashRequest(), GetStateHashResponse).memory_layout_hash
 
     def close(self) -> None:
         """Close connection and release lock."""
